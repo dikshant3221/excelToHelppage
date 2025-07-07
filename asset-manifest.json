@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/excelToHelppage/static/css/main.a3e70abd.css",
+    "main.js": "/excelToHelppage/static/js/main.4be4593d.js",
+    "static/js/453.5a56a087.chunk.js": "/excelToHelppage/static/js/453.5a56a087.chunk.js",
+    "index.html": "/excelToHelppage/index.html",
+    "main.a3e70abd.css.map": "/excelToHelppage/static/css/main.a3e70abd.css.map",
+    "main.4be4593d.js.map": "/excelToHelppage/static/js/main.4be4593d.js.map",
+    "453.5a56a087.chunk.js.map": "/excelToHelppage/static/js/453.5a56a087.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.a3e70abd.css",
+    "static/js/main.4be4593d.js"
+  ]
+}
