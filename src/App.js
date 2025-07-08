@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import './App.css';
 
 function App() {
@@ -13,6 +14,7 @@ function App() {
   ]);
   const [newOption, setNewOption] = useState('');
   const [dragIndex, setDragIndex] = useState(null);
+  const [customHeaders, setCustomHeaders] = useState({});
 
   const handleFolderUpload = async (e) => {
     const fileList = Array.from(e.target.files);
@@ -25,35 +27,55 @@ function App() {
       await workbook.xlsx.load(await file.arrayBuffer());
       const worksheet = workbook.worksheets[0];
 
-      const pairs = [];
-      let current = null;
+      const lang = file.name.split('.')[0];
+      let hasBold = false;
 
       worksheet.eachRow((row) => {
         const cell = row.getCell(1);
-        const cellValue = (cell.value || '').toString().trim();
-
-        if (!cellValue) return;
-
         const isBold = cell.font?.bold === true;
-
-        if (isBold) {
-          if (current) pairs.push(current);
-          current = { header: cellValue, content: '' };
-        } else if (current) {
-          current.content += (current.content ? '\n' : '') + cellValue;
-        }
+        if (isBold) hasBold = true;
       });
 
-      if (current) pairs.push(current);
+      if (!hasBold) {
+        const flatLines = [];
+        worksheet.eachRow((row) => {
+          const cell = row.getCell(1);
+          const text = (cell.value || '').toString().trim();
+          if (text) flatLines.push(text);
+        });
 
-      const lang = file.name.split('.')[0];
-      langParsed[lang] = pairs;
+        langParsed[lang] = [{ header: gameName || '', content: '' }, ...flatLines];
+
+      } else {
+        const pairs = [];
+        let current = null;
+
+        worksheet.eachRow((row) => {
+          const cell = row.getCell(1);
+          const cellValue = (cell.value || '').toString().trim();
+          if (!cellValue) return;
+
+          const isBold = cell.font?.bold === true;
+
+          if (isBold) {
+            if (current) pairs.push(current);
+            current = { header: cellValue, content: '' };
+          } else if (current) {
+            current.content += (current.content ? '\n' : '') + cellValue;
+          }
+        });
+
+        if (current) pairs.push(current);
+        langParsed[lang] = pairs;
+      }
     }
 
     setLangData(langParsed);
-    setGameName(langParsed['en']?.[0]?.header || '');
-  };
+    const firstLangKey = Object.keys(langParsed)[0];
+    setGameName(prev => prev || langParsed[firstLangKey]?.[0]?.header || '');
 
+    setCustomHeaders({});
+  };
 
   const handleMappingChange = (header, key) => {
     setMapping(prev => ({ ...prev, [header]: key }));
@@ -76,12 +98,6 @@ function App() {
   };
 
   const handleRemoveOption = (opt) => {
-    const essentialKeys = ['game', 'rtp', 'description', 'wins', 'wild', 'scatter', 'features'];
-    if (essentialKeys.includes(opt)) {
-      alert(`"${opt}" is a core key and cannot be removed.`);
-      return;
-    }
-
     if (!window.confirm(`Remove key "${opt}" from all dropdowns?`)) return;
 
     setDropdownOptions(prev => prev.filter(o => o !== opt));
@@ -94,20 +110,8 @@ function App() {
     setMapping(updatedMapping);
   };
 
-
   const handleDragStart = (index) => {
     setDragIndex(index);
-  };
-  const handleDeleteLine = (itemIdx, lineIdx) => {
-    setLangData(prevData => {
-      const updated = { ...prevData };
-      Object.keys(updated).forEach(lang => {
-        const lines = updated[lang][itemIdx + 1].content.split('\n');
-        lines.splice(lineIdx, 1);
-        updated[lang][itemIdx + 1].content = lines.join('\n');
-      });
-      return updated;
-    });
   };
 
   const handleDragOver = (index) => {
@@ -119,44 +123,105 @@ function App() {
     setDragIndex(index);
   };
 
-  const buildJson = (lang) => {
-    const pairs = langData[lang] || [];
-    const output = {
-      header: gameName,
-      game: { header: '', content: '' },
-      rtp: { header: '', content: '' },
-      description: { header: '', content: '' },
-      wins: { header: '', content: '' },
-      wild: { header: '', content: '' },
-      scatter: { header: '', content: '' },
-      features: []
-    };
+  const handleDeleteLine = (lineIdx) => {
+    setLangData(prevData => {
+      const updated = { ...prevData };
+      Object.keys(updated).forEach(lang => {
+        const lines = updated[lang].slice();
+        lines.splice(lineIdx + 1, 1);
+        updated[lang] = lines;
+      });
+      return updated;
+    });
 
-    pairs.slice(1).forEach(item => {
-      const mappedKey = mapping[item.header];
-      if (!mappedKey) return;
-      if (mappedKey === 'features') {
-        output.features.push({ header: item.header, content: item.content });
+    setCustomHeaders(prev => {
+      const newHeaders = {};
+      Object.keys(prev).forEach(k => {
+        const i = parseInt(k);
+        if (i < lineIdx) newHeaders[i] = true;
+        else if (i > lineIdx) newHeaders[i - 1] = true;
+      });
+      return newHeaders;
+    });
+  };
+
+  const buildJson = (lang) => {
+    const lines = langData[lang] || [];
+    const textLines = lines.slice(1);
+
+    const output = { header: gameName };
+
+    dropdownOptions.forEach(key => {
+      output[key] = key === 'features' ? [] : { header: '', content: '' };
+    });
+
+    let currentHeader = '';
+    let contentLines = [];
+
+    textLines.forEach((line, idx) => {
+      if (customHeaders[idx]) {
+        if (currentHeader) {
+          const mappedKey = mapping[currentHeader];
+          if (mappedKey && dropdownOptions.includes(mappedKey)) {
+            if (mappedKey === 'features') {
+              output.features.push({ header: currentHeader, content: contentLines.join('\n') });
+            } else {
+              output[mappedKey] = { header: currentHeader, content: contentLines.join('\n') };
+            }
+          }
+        }
+        currentHeader = line;
+        contentLines = [];
       } else {
-        output[mappedKey] = { header: item.header, content: item.content };
+        contentLines.push(line);
+      }
+    });
+
+    if (currentHeader) {
+      const mappedKey = mapping[currentHeader];
+      if (mappedKey && dropdownOptions.includes(mappedKey)) {
+        if (mappedKey === 'features') {
+          output.features.push({ header: currentHeader, content: contentLines.join('\n') });
+        } else {
+          output[mappedKey] = { header: currentHeader, content: contentLines.join('\n') };
+        }
+      }
+    }
+
+    Object.keys(output).forEach(key => {
+      if (key !== 'header' && !dropdownOptions.includes(key)) {
+        delete output[key];
       }
     });
 
     return output;
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
+    const zip = new JSZip();
     Object.keys(langData).forEach(lang => {
       const json = buildJson(lang);
-      const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
-      saveAs(blob, `${lang}.json`);
+      zip.file(`${lang}.json`, JSON.stringify(json, null, 2));
     });
+    const blob = await zip.generateAsync({ type: 'blob' });
+    saveAs(blob, `${gameName || 'translations'}.zip`);
   };
 
   return (
     <div className="App" style={{ padding: 20 }}>
       <h2>📁 Excel Language Folder to Structured JSON</h2>
       <input type="file" webkitdirectory="true" multiple onChange={handleFolderUpload} />
+
+      <div style={{ marginTop: 20 }}>
+        <label><strong>🎮 Enter Game Name: </strong></label>
+        <input
+          type="text"
+          value={gameName}
+          onChange={(e) => setGameName(e.target.value)}
+          placeholder="Enter game name..."
+          style={{ marginLeft: 10, padding: '4px 8px' }}
+        />
+      </div>
 
       <div style={{ marginTop: 20 }}>
         <h4>🛠️ Manage Mapping Keys (Drag to Reorder)</h4>
@@ -208,37 +273,47 @@ function App() {
       {langData['en']?.length > 0 && (
         <div style={{ marginTop: 30 }}>
           <h3>🗂️ Assign Keys for EN File</h3>
-          {langData['en'].slice(1).map((item, idx) => (
-            <div key={idx} style={{ border: '1px solid #ccc', padding: 10, marginBottom: 10, position: 'relative' }}>
-              <strong>{item.header}</strong>
-              {item.content.split('\n').map((line, lineIdx) => (
-                <div key={lineIdx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>{line}</span>
-                  <button
-                    onClick={() => handleDeleteLine(idx, lineIdx)}
-                    style={{ background: 'none', border: 'none', color: 'red', cursor: 'pointer' }}
-                  >
-                    🗑️
-                  </button>
-                </div>
-              ))}
-
-              <select
-                value={mapping[item.header] || ''}
-                onChange={(e) => handleMappingChange(item.header, e.target.value)}
-              >
-                <option value="">--Assign to--</option>
-                {dropdownOptions.map((opt, i) => (
-                  <option key={i} value={opt}>{opt}</option>
-                ))}
-              </select>
-              {mapping[item.header] && (
+          {langData['en'].slice(1).map((line, idx) => (
+            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div>
+                <input
+                  type="checkbox"
+                  checked={customHeaders[idx]}
+                  onChange={() =>
+                    setCustomHeaders(prev => ({
+                      ...prev,
+                      [idx]: !prev[idx],
+                    }))
+                  }
+                />
+                <strong style={{ color: customHeaders[idx] ? 'blue' : 'black', marginLeft: 8 }}>
+                  {line}
+                </strong>
+              </div>
+              {!customHeaders[idx] && (
                 <button
-                  onClick={() => handleDeleteMappingLine(item.header)}
+                  onClick={() => handleDeleteLine(idx)}
+                  style={{ background: 'none', border: 'none', color: 'red', cursor: 'pointer' }}
+                >
+                  🗑️
+                </button>
+              )}
+              {customHeaders[idx] && (
+                <select
+                  value={mapping[line] || ''}
+                  onChange={(e) => handleMappingChange(line, e.target.value)}
+                  style={{ marginLeft: 10 }}
+                >
+                  <option value="">--Assign to--</option>
+                  {dropdownOptions.map((opt, i) => (
+                    <option key={i} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              )}
+              {mapping[line] && (
+                <button
+                  onClick={() => handleDeleteMappingLine(line)}
                   style={{
-                    position: 'absolute',
-                    top: 5,
-                    right: 5,
                     border: 'none',
                     background: 'none',
                     color: 'red',
@@ -265,7 +340,7 @@ function App() {
               </pre>
             </div>
           ))}
-          <button onClick={handleExport} style={{ marginTop: 20 }}>⬇️ Export All JSON Files</button>
+          <button onClick={handleExport} style={{ marginTop: 20 }}>⬇️ Export All JSON Files (ZIP)</button>
         </div>
       )}
     </div>
